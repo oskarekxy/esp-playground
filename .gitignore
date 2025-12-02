@@ -1,0 +1,5 @@
+build/
+.vscode/
+.cache/
+managed_components/
+compile_commands.json

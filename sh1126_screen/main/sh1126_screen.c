@@ -8,6 +8,9 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 
+#include "font.h"
+#include <string.h>
+
 #define OLED_RST_PIN GPIO_NUM_1
 #define OLED_CS_PIN GPIO_NUM_7
 #define OLED_DC_PIN GPIO_NUM_0
@@ -17,19 +20,47 @@
 #define USE_HORIZONTAL 0
 
 // SCREEN SIZE
-#define Max_Column 256
-#define Max_Row 96
+#define COLUMNS 320
+#define ROWS 96
+
+#define SH1126_BUFFER_SIZE (COLUMNS * ROWS / 2) // 18432
+
+uint8_t framebuffer[SH1126_BUFFER_SIZE];
 
 #define TAG "OLED_INIT"
 
 // SPI device handle
 spi_device_handle_t spi;
 
-// Function to send a command to the OLED
-void Write_Instruction(uint8_t cmd)
+void SetCS(uint8_t level)
 {
-    gpio_set_level(OLED_DC_PIN, 0); // Command mode
-    gpio_set_level(OLED_CS_PIN, 0); // Select OLED
+    gpio_set_level(OLED_CS_PIN, level);
+}
+
+void SetDC(uint8_t level)
+{
+    gpio_set_level(OLED_DC_PIN, level);
+}
+
+void SetRst(uint8_t level)
+{
+    gpio_set_level(OLED_RST_PIN, level);
+}
+
+void DelayMs(uint32_t ms)
+{
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+void ResetDisplay(void)
+{
+}
+
+// Function to send a command to the OLED
+void WriteCommand(uint8_t cmd)
+{
+    SetDC(0); // Command mode
+    SetCS(0); // Select OLED
 
     spi_transaction_t t = {
         .flags = 0,
@@ -42,12 +73,12 @@ void Write_Instruction(uint8_t cmd)
         ESP_LOGE(TAG, "SPI transmit failed");
     }
 
-    gpio_set_level(OLED_CS_PIN, 1); // Deselect OLED
+    SetCS(1); // Deselect OLED
 }
 
 void WriteData(uint8_t data)
 {
-    gpio_set_level(OLED_DC_PIN, 1); // Data mode
+    SetDC(1);                       // Data mode
     gpio_set_level(OLED_CS_PIN, 0); // Select OLED
 
     spi_transaction_t t = {
@@ -61,66 +92,77 @@ void WriteData(uint8_t data)
         ESP_LOGE(TAG, "SPI transmit failed");
     }
 
-    gpio_set_level(OLED_CS_PIN, 1); // Deselect OLED
+    SetCS(1); // Deselect OLED
+}
+
+void SetCol(uint8_t col)
+{
+    // one byte sets 2 pixel values so we need cols / 2 to get the correct column address
+    WriteCommand(0x10 | (col >> 4));   // Set higher column address
+    WriteCommand(0x00 | (col & 0x0F)); // Set lower column address
+}
+
+void SetRow(uint8_t row)
+{
+    WriteCommand(0xB0);
+    WriteCommand(row & 0x7F);
+}
+
+void ClearDisplay(void)
+{
+    for (uint8_t row = 0; row < ROWS; row++)
+    {
+        SetRow(row);
+        SetCol(0);
+        for (uint8_t col = 0; col < COLUMNS / 2; col++) // 2 pixels per byte
+        {
+            WriteData(0xFF); // Clear pixel data
+        }
+    }
 }
 
 // Function to initialize the OLED
-void Initial(void)
+void InitDisplay(void)
 {
-    // Reset the OLED
-    gpio_set_level(OLED_RST_PIN, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level(OLED_RST_PIN, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level(OLED_RST_PIN, 1);
-    vTaskDelay(pdMS_TO_TICKS(100));
 
-    // Send initialization commands
-    Write_Instruction(0xAE); // Set Display Off
-
-    Write_Instruction(0xD5); // Set Display Clock Divide Ratio/Oscillator Frequency
-    Write_Instruction(0x50); // 50 125hz
-
-    Write_Instruction(0xD9); // Set Discharge/Precharge Period
-    Write_Instruction(0x2F); // 1F
-
-    Write_Instruction(0x40); // Set Display Start Line 40
-    Write_Instruction(0x00); // 30
-
-    Write_Instruction(0xA4); // Set Entire Display OFF/ON
-
-    Write_Instruction(0xA6); // Set Normal/Reverse Display
-
-    Write_Instruction(0xA8); // Set Multiplex Ratio
-    Write_Instruction(0x5F);
-
-    Write_Instruction(0xAD); // DC-DC Setting
-    Write_Instruction(0x80); // DC-DC is disable
-
-    Write_Instruction(0xD3); // Set Display Offset
-    Write_Instruction(0x00);
-
-    Write_Instruction(0xDB); // Set VCOM Deselect Level
-    Write_Instruction(0x24); // 0x30
-
-    Write_Instruction(0xDC); // Set VSEGM Level
-    Write_Instruction(0x05); // 0x30
-
-    Write_Instruction(0x30); // Set Discharge VSL Level 1.5*VREF
-
-    Write_Instruction(0x81); // The Contrast Control Mode Set
-    Write_Instruction(0x40); // Contrast value
-
-    if (USE_HORIZONTAL == 0)
-    {
-        Write_Instruction(0xA0); // Set Segment Re-map
-        Write_Instruction(0xC0); // Set Common Output Scan Direction
+    { // Reset the display
+        SetRst(0);
+        // the display require at least 10us reset pulse
+        DelayMs(1);
+        SetRst(1);
+        DelayMs(1);
     }
-    else
-    {
-        Write_Instruction(0xA1); // Set Segment Re-map
-        Write_Instruction(0xC8); // Set Common Output Scan Direction
-    }
+
+    WriteCommand(0xAE); // Display off
+
+    // SET ROW numbers - Multiplex Ratio
+    WriteCommand(0xA8);
+    WriteCommand(0x5F); // 96 rows
+
+    // set position of first row to display in the display RAM
+    WriteCommand(0x40);
+    // set display start line to 0
+    WriteCommand(0x00);
+
+    WriteCommand(0xA0); // Set segment remap (if screen shows upside down, change to 0xA1)
+
+    WriteCommand(0xC0); // Set COM output scan direction (if screen shows upside down, change to 0xC8)
+
+    WriteCommand(81);   // Set contrast control (brightness)
+    WriteCommand(0x80); // Contrast value (0-255)
+
+    WriteCommand(0xD9); // Pre-charge/discharge
+    WriteCommand(0x22); // Pre-charge period
+
+    WriteCommand(0xDB); // VCOMH deselect level command
+    WriteCommand(0x35); // VCOMH deselect level set value
+
+    WriteCommand(0xd5); // Set display clock divide ratio/oscillator frequency
+    WriteCommand(0x50); // Display clock divide ratio/oscillator frequency
+
+    ClearDisplay();
+
+    WriteCommand(0xAF); // Display on
 }
 
 // SPI and GPIO initialization
@@ -157,11 +199,129 @@ void OledSpiInit(void)
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &spi));
 }
 
-void FillScreen(uint8_t color)
+void SetPixel(uint16_t x, uint16_t y, uint8_t gray)
 {
-    for (int i = 0; i < Max_Column * Max_Row; i++)
+    if (x >= COLUMNS || y >= ROWS)
+        return;
+    if (gray > 15)
+        gray = 15;
+
+    // Compute byte index in framebuffer
+    // Each row has 192 bytes, so offset = y * 192 + (x / 2)
+    uint16_t byte_index = y * (COLUMNS / 2) + (x / 2);
+    uint8_t current = framebuffer[byte_index];
+
+    if (x & 1)
     {
-        WriteData(color);
+        // Odd column -> higher nibble
+        current = (current & 0x0F) | (gray << 4);
+    }
+    else
+    {
+        // Even column -> lower nibble
+        current = (current & 0xF0) | (gray);
+    }
+    framebuffer[byte_index] = current;
+}
+
+void DrawChar(int16_t x, int16_t y, unsigned char c, uint8_t gray)
+{
+    if (c < 32 || c > 126)
+        c = 32; // replace unsupported chars with space
+    c -= 32;    // index in font array
+
+    for (uint8_t row = 0; row < 8; row++)
+    {
+        uint8_t line = font6x8[c][row];
+        for (uint8_t col = 0; col < 6; col++)
+        {
+            // font bits use the high bits; test bits 7..2 for 6 columns
+            if (line & (0x80 >> col))
+            { // 0x20 = bit5 (leftmost)
+                SetPixel(x + col, y + row, gray);
+            }
+        }
+    }
+}
+
+void DrawString(const char *str, uint8_t x, uint8_t y, uint8_t brightness)
+{
+    while (*str)
+    {
+        DrawChar(x, y, *str++, brightness);
+        x += CHAR_WIDTH;
+    }
+}
+
+// Draw a character scaled to a specific target height (preserves font aspect)
+// target_h: desired character height in pixels (e.g. 70)
+void DrawCharLarge(int16_t x, int16_t y, unsigned char c, uint8_t gray, uint16_t target_h)
+{
+    if (c < 32 || c > 126)
+        c = 32;
+    c -= 32;
+
+    // target width scaled proportionally to height
+    uint16_t target_w = (CHAR_WIDTH * target_h + CHAR_HEIGHT / 2) / CHAR_HEIGHT; // rounded
+
+    // For each source pixel in font (src_col, src_row) map to a block in target
+    for (uint8_t src_row = 0; src_row < CHAR_HEIGHT; src_row++)
+    {
+        // compute destination row range for this source row
+        uint16_t dst_row_start = (src_row * target_h) / CHAR_HEIGHT;
+        uint16_t dst_row_end = ((src_row + 1) * target_h) / CHAR_HEIGHT;
+        if (dst_row_end > 0)
+            dst_row_end -= 1;
+
+        uint8_t line = font[src_row];
+
+        for (uint8_t src_col = 0; src_col < CHAR_WIDTH; src_col++)
+        {
+            // compute destination column range for this source column
+            uint16_t dst_col_start = (src_col * target_w) / CHAR_WIDTH;
+            uint16_t dst_col_end = ((src_col + 1) * target_w) / CHAR_WIDTH;
+            if (dst_col_end > 0)
+                dst_col_end -= 1;
+
+            // check source pixel on/off using same bit mapping as DrawChar
+            if (line & (0x20 >> src_col))
+            {
+                // fill mapped block
+                for (uint16_t ry = dst_row_start; ry <= dst_row_end; ry++)
+                {
+                    for (uint16_t rx = dst_col_start; rx <= dst_col_end; rx++)
+                    {
+                        SetPixel(x + rx, y + ry, gray);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Draw a string using the large scaled font. Advances by the computed target width + 1 pixel spacing.
+void DrawStringLarge(const char *str, uint16_t x, uint16_t y, uint8_t brightness, uint16_t target_h)
+{
+    uint16_t target_w = (CHAR_WIDTH * target_h + CHAR_HEIGHT / 2) / CHAR_HEIGHT;
+    while (*str)
+    {
+        DrawCharLarge(x, y, *str++, brightness, target_h);
+        x += target_w + 1; // 1 pixel gap between chars
+    }
+}
+
+void UpdateDisplay()
+{
+    for (uint8_t row = 0; row < ROWS; row++)
+    {
+        SetRow(row);
+        SetCol(0);
+        // Write the entire row (192 bytes)
+        uint16_t row_offset = row * (COLUMNS / 2);
+        for (uint16_t col = 0; col < COLUMNS / 2; col++)
+        {
+            WriteData(framebuffer[row_offset + col]);
+        }
     }
 }
 
@@ -171,21 +331,77 @@ void app_main(void)
 {
     OledSpiInit();
 
-    Initial();
+    InitDisplay();
 
-    int8_t color = 0;
+    // Ensure framebuffer starts cleared
+    memset(framebuffer, 0, sizeof(framebuffer));
 
-    while (1)
-    {
-        ESP_LOGI(TAG, "color %d", (int)color);
+    DrawString("Hello, World!", 20, 40, 15);
 
-        FillScreen(color);
-        vTaskDelay(100);
-        color++;
+    UpdateDisplay();
 
-        if (color == 255)
-        {
-            color = 0;
-        }
-    }
+    // int8_t color = 0;
+    // int cols = COLUMNS;
+
+    // while (1)
+    // {
+    //     ESP_LOGI(TAG, "cols %d, color: %d", (int)cols, (int)color);
+
+    //     // FillScreen(color);
+    //     vTaskDelay(100);
+    //     color++;
+
+    // if (color == 16)
+    // {
+    //     color = 0;
+    // }
+
+    // for (uint8_t row = 0; row < ROWS; row++)
+    // {
+    //     SetRow(row);
+    //     SetCol(0);
+    //     for (uint8_t col = 0; col < cols / 2; col++) // 2 pixels per byte
+    //     {
+    //         WriteData(color << 4 | color); // Clear pixel data
+    //     }
+    // }
+
+    // for (uint8_t row = 0; row < 96; row++) // 96 rows
+    // {
+    //     SetRow(row); // Set the current row (your function)
+    //     SetCol(0);   // Start at column 0 (left edge)
+
+    //     for (uint8_t col_byte = 0; col_byte < 160; col_byte++) // 320 pixels = 160 bytes
+    //     {
+    //         uint16_t pixel_x = (uint16_t)col_byte * 2; // left pixel position (0,2,4,...,318)
+
+    //         uint8_t gray_left = pixel_x / 20;        // 0..15
+    //         uint8_t gray_right = (pixel_x + 1) / 20; // 0..15
+
+    //         uint8_t data_byte = (gray_left << 4) | gray_right; // high nibble = left pixel, low nibble = right pixel
+
+    //         WriteData(data_byte);
+    //     }
+    // }
+
+    // for (uint8_t row = 0; row < ROWS; row++)
+    // {
+    //     SetRow(row);
+    //     SetCol(0);
+    //     for (uint8_t col = 0; col < cols / 2; col++) // 2 pixels per byte
+    //     {
+    //         if (row < 10 || row > 85 || col < 10 || col > 150)
+    //         {
+    //             color = 15;
+    //         }
+    //         else
+    //         {
+    //             color = 0;
+    //         }
+    //         WriteData(color << 4 | color); // Clear pixel data
+    //     }
+    // }
+
+    // cols++;
+    // }
 }

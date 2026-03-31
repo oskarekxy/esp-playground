@@ -38,11 +38,12 @@
 // --- Globals ---
 uint8_t framebuffer[SH1126_BUFFER_SIZE];
 spi_device_handle_t spi;
-static TickType_t time_0 = 0;
 
 // --- Forward declarations ---
 uint32_t my_get_millis(void);
 void my_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map);
+
+static TickType_t time_0 = 0;
 
 // -------------------------------------------------------------------------
 // Timer
@@ -149,9 +150,9 @@ void SetPixel(uint16_t x, uint16_t y, uint8_t gray)
     uint8_t current = framebuffer[byte_index];
 
     if (x & 1)
-        current = (current & 0x0F) | (gray << 4); // odd pixel -> high nibble
-    else
         current = (current & 0xF0) | (gray); // even pixel -> low nibble
+    else
+        current = (current & 0x0F) | (gray << 4); // odd pixel -> high nibble
 
     framebuffer[byte_index] = current;
 }

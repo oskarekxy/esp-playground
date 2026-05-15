@@ -1,7 +1,17 @@
-#define CHAR_WIDTH 16
-#define CHAR_HEIGHT 64
+#ifndef FONT_H
+#define FONT_H
 
-const uint32_t font[95] = {
+#include <stdint.h>
+
+// ============================================================================
+// Compact 4x6 font stored as 16-bit packed values (from the "font" project).
+// Each character is encoded as a single uint32_t.
+// Kept for reference/future use with the DrawCharLarge compact renderer.
+// ============================================================================
+#define COMPACT_FONT_WIDTH 4
+#define COMPACT_FONT_HEIGHT 6
+
+const uint32_t font_compact[95] = {
     0x0000,
     0x2092,
     0x002d,
@@ -99,6 +109,12 @@ const uint32_t font[95] = {
     0x03e0,
 };
 
+// ============================================================================
+// Standard 6x8 bitmap font - used by DrawChar and DrawCharLarge.
+// Each character is stored as 8 bytes (one byte per row, MSB-first for columns).
+// Bit 7 = leftmost pixel (column 0), bit 2 = rightmost pixel (column 5).
+// Characters 32 (space) through 126 (~).
+// ============================================================================
 const uint8_t font6x8[][8] = {
     // 32 (space)
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
@@ -291,3 +307,7 @@ const uint8_t font6x8[][8] = {
     // 126 '~'
     {0x40, 0xa8, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00},
 };
+
+
+
+#endif // FONT_H

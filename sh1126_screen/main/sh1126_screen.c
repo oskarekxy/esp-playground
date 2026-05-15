@@ -19,11 +19,18 @@
 
 #define USE_HORIZONTAL 0
 
-// SCREEN SIZE
-#define COLUMNS 320
+// SCREEN SIZE - The ER-OLED2.45-1 physical resolution is 304x96
+// The SH1126 GDDRAM is wider internally, so we need a column byte offset
+// to address the visible area correctly.
+#define COLUMNS 304
 #define ROWS 96
 
-#define SH1126_BUFFER_SIZE (COLUMNS * ROWS / 2) // 18432
+// Column byte offset into GDDRAM where the visible 304-pixel area starts.
+// The reference code uses base address 0x14 = 20 bytes (40 pixels offset).
+// This centers the 304-pixel (152-byte) visible area within the GDDRAM.
+#define COL_OFFSET 20
+
+#define SH1126_BUFFER_SIZE (COLUMNS * ROWS / 2) // 14592 bytes (4-bit grayscale: 2 pixels per byte)
 
 uint8_t framebuffer[SH1126_BUFFER_SIZE];
 
@@ -97,9 +104,15 @@ void WriteData(uint8_t data)
 
 void SetCol(uint8_t col)
 {
-    // one byte sets 2 pixel values so we need cols / 2 to get the correct column address
-    WriteCommand(0x10 | (col >> 4));   // Set higher column address
-    WriteCommand(0x00 | (col & 0x0F)); // Set lower column address
+    // Apply the GDDRAM column offset so we address the visible display area.
+    // The SH1126 column address commands:
+    //   0x10..0x1F = set higher nibble of column address
+    //   0x00..0x0F = set lower nibble of column address
+    // We add COL_OFFSET to translate from our framebuffer byte index (0..151)
+    // to the actual GDDRAM byte column.
+    uint8_t addr = col + COL_OFFSET;
+    WriteCommand(0x10 | (addr >> 4));   // Set higher column address
+    WriteCommand(0x00 | (addr & 0x0F)); // Set lower column address
 }
 
 void SetRow(uint8_t row)
@@ -114,9 +127,9 @@ void ClearDisplay(void)
     {
         SetRow(row);
         SetCol(0);
-        for (uint8_t col = 0; col < COLUMNS / 2; col++) // 2 pixels per byte
+        for (uint8_t col = 0; col < COLUMNS / 2; col++) // 152 bytes per row (2 pixels per byte)
         {
-            WriteData(0xFF); // Clear pixel data
+            WriteData(0x00); // Clear pixel data (black)
         }
     }
 }
@@ -207,19 +220,20 @@ void SetPixel(uint16_t x, uint16_t y, uint8_t gray)
         gray = 15;
 
     // Compute byte index in framebuffer
-    // Each row has 192 bytes, so offset = y * 192 + (x / 2)
+    // Each row has COLUMNS/2 = 152 bytes, so offset = y * 152 + (x / 2)
     uint16_t byte_index = y * (COLUMNS / 2) + (x / 2);
     uint8_t current = framebuffer[byte_index];
 
+    // SH1126 nibble ordering: HIGH nibble = left (even) pixel, LOW nibble = right (odd) pixel
     if (x & 1)
     {
-        // Odd column -> higher nibble
-        current = (current & 0x0F) | (gray << 4);
+        // Odd column -> lower nibble (right pixel)
+        current = (current & 0xF0) | (gray);
     }
     else
     {
-        // Even column -> lower nibble
-        current = (current & 0xF0) | (gray);
+        // Even column -> higher nibble (left pixel)
+        current = (current & 0x0F) | (gray << 4);
     }
     framebuffer[byte_index] = current;
 }
@@ -249,7 +263,7 @@ void DrawString(const char *str, uint8_t x, uint8_t y, uint8_t brightness)
     while (*str)
     {
         DrawChar(x, y, *str++, brightness);
-        x += CHAR_WIDTH;
+        x += 6; // font6x8 is 6 pixels wide
     }
 }
 
@@ -261,30 +275,30 @@ void DrawCharLarge(int16_t x, int16_t y, unsigned char c, uint8_t gray, uint16_t
         c = 32;
     c -= 32;
 
-    // target width scaled proportionally to height
-    uint16_t target_w = (CHAR_WIDTH * target_h + CHAR_HEIGHT / 2) / CHAR_HEIGHT; // rounded
+    // target width scaled proportionally to height (based on 6x8 source font)
+    uint16_t target_w = (6 * target_h + 4) / 8; // rounded
 
     // For each source pixel in font (src_col, src_row) map to a block in target
-    for (uint8_t src_row = 0; src_row < CHAR_HEIGHT; src_row++)
+    for (uint8_t src_row = 0; src_row < 8; src_row++)
     {
         // compute destination row range for this source row
-        uint16_t dst_row_start = (src_row * target_h) / CHAR_HEIGHT;
-        uint16_t dst_row_end = ((src_row + 1) * target_h) / CHAR_HEIGHT;
+        uint16_t dst_row_start = (src_row * target_h) / 8;
+        uint16_t dst_row_end = ((src_row + 1) * target_h) / 8;
         if (dst_row_end > 0)
             dst_row_end -= 1;
 
-        uint8_t line = font[src_row];
+        uint8_t line = font6x8[c][src_row];
 
-        for (uint8_t src_col = 0; src_col < CHAR_WIDTH; src_col++)
+        for (uint8_t src_col = 0; src_col < 6; src_col++)
         {
             // compute destination column range for this source column
-            uint16_t dst_col_start = (src_col * target_w) / CHAR_WIDTH;
-            uint16_t dst_col_end = ((src_col + 1) * target_w) / CHAR_WIDTH;
+            uint16_t dst_col_start = (src_col * target_w) / 6;
+            uint16_t dst_col_end = ((src_col + 1) * target_w) / 6;
             if (dst_col_end > 0)
                 dst_col_end -= 1;
 
-            // check source pixel on/off using same bit mapping as DrawChar
-            if (line & (0x20 >> src_col))
+            // check source pixel on/off (font6x8 uses high bits: bit7..bit2 for 6 columns)
+            if (line & (0x80 >> src_col))
             {
                 // fill mapped block
                 for (uint16_t ry = dst_row_start; ry <= dst_row_end; ry++)
@@ -302,7 +316,7 @@ void DrawCharLarge(int16_t x, int16_t y, unsigned char c, uint8_t gray, uint16_t
 // Draw a string using the large scaled font. Advances by the computed target width + 1 pixel spacing.
 void DrawStringLarge(const char *str, uint16_t x, uint16_t y, uint8_t brightness, uint16_t target_h)
 {
-    uint16_t target_w = (CHAR_WIDTH * target_h + CHAR_HEIGHT / 2) / CHAR_HEIGHT;
+    uint16_t target_w = (6 * target_h + 4) / 8; // match DrawCharLarge width calc
     while (*str)
     {
         DrawCharLarge(x, y, *str++, brightness, target_h);
@@ -316,7 +330,7 @@ void UpdateDisplay()
     {
         SetRow(row);
         SetCol(0);
-        // Write the entire row (192 bytes)
+        // Write the entire row (152 bytes = 304 pixels / 2)
         uint16_t row_offset = row * (COLUMNS / 2);
         for (uint16_t col = 0; col < COLUMNS / 2; col++)
         {

@@ -89,6 +89,17 @@ void WriteCommand(uint8_t cmd)
 void SetCol(uint8_t col)
 {
     // col is the byte address (2 pixels per byte), so col = pixel_x / 2
+    // SH1126 display RAM starts at column offset 0x14 (high=0x11, low=0x04)
+    // uint8_t low = 0x04 + (col & 0x0F);
+    // uint8_t high = 0x11 + (col >> 4);
+    // if (low > 0x0F)
+    // {
+    //     high += 1;
+    //     low -= 0x10;
+    // }
+    // WriteCommand(high);          // High nibble of column address
+    // WriteCommand(low & 0x0F);   // Low nibble of column address
+
     WriteCommand(0x10 | (col >> 4));   // High nibble
     WriteCommand(0x00 | (col & 0x0F)); // Low nibble
 }
@@ -150,9 +161,9 @@ void SetPixel(uint16_t x, uint16_t y, uint8_t gray)
     uint8_t current = framebuffer[byte_index];
 
     if (x & 1)
-        current = (current & 0xF0) | (gray); // even pixel -> low nibble
+        current = (current & 0xF0) | (gray); // odd pixel -> low nibble
     else
-        current = (current & 0x0F) | (gray << 4); // odd pixel -> high nibble
+        current = (current & 0x0F) | (gray << 4); // even pixel -> high nibble
 
     framebuffer[byte_index] = current;
 }
@@ -297,7 +308,7 @@ void app_main(void)
     my_timer_init();
     lv_tick_set_cb(my_get_millis);
 
-    lv_display_t *display1 = lv_display_create(ROWS, COLUMNS);
+    lv_display_t *display1 = lv_display_create(COLUMNS, ROWS);
     lv_display_set_color_format(display1, LV_COLOR_FORMAT_I1);
 
     static uint8_t buf1[ROWS * COLUMNS / 10 * BYTES_PER_PIXEL];

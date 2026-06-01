@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 #include "driver/gpio.h"
 
@@ -8,8 +9,8 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#include "wheel_hid_interface.hpp"
 #include "tinyusb_default_config.h"
+#include "wheel_hid_interface.hpp"
 
 static const char *APP_NAME = "WHEEL";
 
@@ -72,7 +73,7 @@ void app_main(void)
 
     printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
-    xTaskCreate(hid_report_task, "hid_report", 2048, NULL, 5, NULL);
+    xTaskCreate(hid_report_task, "hid_report", 3072, NULL, 5, NULL);
 }
 
 static void hid_report_task(void *arg)
@@ -108,19 +109,19 @@ static void gpio_task(void *arg)
         {
             vTaskDelay(pdMS_TO_TICKS(20)); // debounce
 
-            int level = gpio_get_level(io_num);
+            int gear_up = !gpio_get_level(GPIO_INPUT_GEAR_UP);
+            int gear_down = !gpio_get_level(GPIO_INPUT_GEAR_DOWN);
 
             xSemaphoreTake(report_mutex, portMAX_DELAY);
-            if (io_num == GPIO_INPUT_GEAR_UP)
-                hid_report_buttons = (hid_report_buttons & ~0x01) | (!level);
-            else if (io_num == GPIO_INPUT_GEAR_DOWN)
-                hid_report_buttons = (hid_report_buttons & ~0x02) | ((!level) << 1);
+            hid_report_buttons = (gear_up) | (gear_down << 1);
             xSemaphoreGive(report_mutex);
 
             // Drain any queued bounce events
-            while (xQueueReceive(gpio_evt_queue, &io_num, 0)) {}
+            while (xQueueReceive(gpio_evt_queue, &io_num, 0))
+            {
+            }
 
-            ESP_LOGI(APP_NAME, "GPIO[%" PRIu32 "] val: %d", io_num, level);
+            ESP_LOGI(APP_NAME, "Buttons: UP=%d DOWN=%d", gear_up, gear_down);
         }
     }
 }

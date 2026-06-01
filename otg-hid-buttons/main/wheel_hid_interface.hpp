@@ -48,9 +48,9 @@ static const uint8_t hid_configuration_descriptor[] = {
     TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUSB_DESC_TOTAL_LEN,
                           TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
     // HID descriptor: interface 0, string idx 4, no boot protocol,
-    //   report desc size, endpoint 0x81 (IN), 16 byte buffer, 1ms poll
+    //   report desc size, endpoint 0x81 (IN), 16 byte buffer, 5ms poll
     TUD_HID_DESCRIPTOR(0, 4, false, sizeof(buttons_report_descriptor),
-                       0x81, 16, 1),
+                       0x81, 16, 5),
 };
 
 // ─── TinyUSB Callbacks (required) ───────────────────────────────────────────
